@@ -249,8 +249,12 @@ app.post('/api/send', async (req, res) => {
       messageStatus = `⏳ *NA FILA* - Posição: ${position}\n_Esta pessoa está aguardando. Encerre a conversa atual para atendê-la._`;
     }
 
-    // Formatar mensagem para o Telegram com identificação única
-    const formattedMessage = `
+    // Formatar mensagem para o Telegram
+    let formattedMessage = '';
+    
+    // Mensagem completa apenas na PRIMEIRA mensagem
+    if (isFirstMessage) {
+      formattedMessage = `
 💬 *NOVA MENSAGEM*
 
 ${messageStatus}
@@ -270,7 +274,14 @@ ${message}
 • \`/encerrar\` - Finaliza e atende próximo da fila
 • \`/fila\` - Ver quem está esperando
 • \`/limpar\` - Encerra TODAS as conversas
-    `.trim();
+      `.trim();
+    } else {
+      // Mensagens seguintes: apenas nome e mensagem (simples)
+      formattedMessage = `
+💬 *${userName || 'Visitante'}:*
+${message}
+      `.trim();
+    }
 
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
