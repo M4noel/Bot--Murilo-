@@ -112,6 +112,44 @@ async function handleQueueCommand(token, chatId) {
   });
 }
 
+async function handleClearAllCommand(token, chatId) {
+  const totalConversations = Object.keys(conversations).length;
+  const queueLength = waitingQueue.length;
+  const activeUser = activeConversation && conversations[activeConversation] 
+    ? conversations[activeConversation].userName 
+    : null;
+  
+  // Marcar todas as conversas como encerradas
+  Object.keys(conversations).forEach(sessionId => {
+    if (conversations[sessionId]) {
+      conversations[sessionId].status = 'ended';
+    }
+  });
+  
+  // Limpar conversa ativa e fila
+  activeConversation = null;
+  waitingQueue = [];
+  
+  let message = `🧹 *TODAS AS CONVERSAS ENCERRADAS*\n\n`;
+  message += `✅ Total encerrado: ${totalConversations} conversa(s)\n`;
+  
+  if (activeUser) {
+    message += `🟢 Ativa: ${activeUser}\n`;
+  }
+  
+  if (queueLength > 0) {
+    message += `⏳ Na fila: ${queueLength} pessoa(s)\n`;
+  }
+  
+  message += `\n📭 Sistema limpo e pronto para novos atendimentos!`;
+  
+  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+    chat_id: chatId,
+    text: message,
+    parse_mode: 'Markdown'
+  });
+}
+
 // Rota para enviar mensagem do site para o Telegram
 app.post('/api/send', async (req, res) => {
   const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -156,6 +194,8 @@ app.post('/api/send', async (req, res) => {
     // Verificar se há conversa ativa
     let messageStatus = '';
     let isFirstMessage = conversations[sessionId].messages.length === 1;
+    let shouldNotifyUser = false;
+    let userPosition = 0;
     
     if (!activeConversation && isFirstMessage) {
       // Primeira mensagem e nenhuma conversa ativa - ativar esta
@@ -172,6 +212,8 @@ app.post('/api/send', async (req, res) => {
       }
       conversations[sessionId].status = 'waiting';
       const position = waitingQueue.indexOf(sessionId) + 1;
+      userPosition = position;
+      shouldNotifyUser = true;
       messageStatus = `⏳ *NA FILA* - Posição: ${position}\n_Esta pessoa está aguardando. Encerre a conversa atual para atendê-la._`;
     }
 
@@ -195,6 +237,7 @@ ${message}
 • Responda normalmente para continuar
 • \`/encerrar\` - Finaliza e atende próximo da fila
 • \`/fila\` - Ver quem está esperando
+• \`/limpar\` - Encerra TODAS as conversas
     `.trim();
 
     await axios.post(
@@ -217,9 +260,27 @@ ${message}
       sessionId: sessionId
     });
 
+    // Se o usuário está na fila, enviar notificação para ele
+    let queueNotification = null;
+    if (shouldNotifyUser && userPosition > 0) {
+      const queueMessage = `⏳ Você está na fila de atendimento!\n\n📍 Posição: ${userPosition}\n\n⏰ Aguarde, em breve você será atendido.`;
+      
+      // Adicionar mensagem automática à conversa
+      conversations[sessionId].messages.push({
+        text: queueMessage,
+        isUser: false,
+        timestamp: Date.now(),
+        isSystemMessage: true
+      });
+      
+      queueNotification = queueMessage;
+    }
+
     return res.status(200).json({ 
       success: true, 
-      message: "Mensagem enviada com sucesso!" 
+      message: "Mensagem enviada com sucesso!",
+      queueNotification: queueNotification,
+      queuePosition: userPosition > 0 ? userPosition : null
     });
   } catch (error) {
     console.error("❌ Erro ao enviar mensagem:", error.response?.data || error.message);
@@ -278,6 +339,11 @@ app.get('/api/messages', async (req, res) => {
           
           if (msg.text.startsWith('/fila')) {
             await handleQueueCommand(TELEGRAM_TOKEN, CHAT_ID);
+            continue;
+          }
+          
+          if (msg.text.startsWith('/limpar')) {
+            await handleClearAllCommand(TELEGRAM_TOKEN, CHAT_ID);
             continue;
           }
 
