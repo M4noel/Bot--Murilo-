@@ -39,9 +39,17 @@ async function handleEndCommand(token, chatId) {
   const endedSession = activeConversation;
   const endedUser = conversations[endedSession];
   
-  // Marcar como encerrada
+  // Marcar como encerrada e enviar mensagem de encerramento
   if (conversations[endedSession]) {
     conversations[endedSession].status = 'ended';
+    
+    // Adicionar mensagem de encerramento para o usuário
+    conversations[endedSession].messages.push({
+      text: '❌ Chat encerrado. Obrigado pelo contato! Se precisar, inicie uma nova conversa.',
+      isUser: false,
+      timestamp: Date.now(),
+      isSystemMessage: true
+    });
   }
   
   // Limpar conversa ativa
@@ -55,6 +63,14 @@ async function handleEndCommand(token, chatId) {
     if (conversations[nextSession]) {
       conversations[nextSession].status = 'active';
       nextUser = conversations[nextSession];
+      
+      // Enviar mensagem de ativação para o próximo usuário
+      conversations[nextSession].messages.push({
+        text: '🟢 Agora é sua vez! Você está sendo atendido.',
+        isUser: false,
+        timestamp: Date.now(),
+        isSystemMessage: true
+      });
     }
   }
   
@@ -123,6 +139,14 @@ async function handleClearAllCommand(token, chatId) {
   Object.keys(conversations).forEach(sessionId => {
     if (conversations[sessionId]) {
       conversations[sessionId].status = 'ended';
+      
+      // Enviar mensagem de encerramento para cada usuário
+      conversations[sessionId].messages.push({
+        text: '❌ Chat encerrado. Obrigado pelo contato! Se precisar, inicie uma nova conversa.',
+        isUser: false,
+        timestamp: Date.now(),
+        isSystemMessage: true
+      });
     }
   });
   
@@ -202,6 +226,14 @@ app.post('/api/send', async (req, res) => {
       activeConversation = sessionId;
       conversations[sessionId].status = 'active';
       messageStatus = '🟢 *CONVERSA ATIVA* - Você pode responder agora!';
+      
+      // Enviar mensagem de boas-vindas para o usuário
+      conversations[sessionId].messages.push({
+        text: '✅ Chat iniciado! Em breve você será atendido.',
+        isUser: false,
+        timestamp: Date.now(),
+        isSystemMessage: true
+      });
     } else if (activeConversation === sessionId) {
       // Continuação da conversa ativa
       messageStatus = '🟢 *CONVERSA ATIVA*';
@@ -260,26 +292,30 @@ ${message}
       sessionId: sessionId
     });
 
-    // Se o usuário está na fila, enviar notificação para ele
-    let queueNotification = null;
-    if (shouldNotifyUser && userPosition > 0) {
-      const queueMessage = `⏳ Você está na fila de atendimento!\n\n📍 Posição: ${userPosition}\n\n⏰ Aguarde, em breve você será atendido.`;
+    // Notificações do sistema
+    let systemNotification = null;
+    
+    // Se é primeira mensagem e foi ativado
+    if (!activeConversation && isFirstMessage) {
+      systemNotification = '✅ Chat iniciado! Em breve você será atendido.';
+    }
+    // Se o usuário está na fila
+    else if (shouldNotifyUser && userPosition > 0) {
+      systemNotification = `⏳ Você está na fila de atendimento!\n\n📍 Posição: ${userPosition}\n\n⏰ Aguarde, em breve você será atendido.`;
       
       // Adicionar mensagem automática à conversa
       conversations[sessionId].messages.push({
-        text: queueMessage,
+        text: systemNotification,
         isUser: false,
         timestamp: Date.now(),
         isSystemMessage: true
       });
-      
-      queueNotification = queueMessage;
     }
 
     return res.status(200).json({ 
       success: true, 
       message: "Mensagem enviada com sucesso!",
-      queueNotification: queueNotification,
+      systemNotification: systemNotification,
       queuePosition: userPosition > 0 ? userPosition : null
     });
   } catch (error) {
