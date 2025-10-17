@@ -1,13 +1,12 @@
 {
   "name": "telegram-bot-portfolio",
   "version": "1.0.0",
-  "description": "Bot automático do Telegram com Vue.js e Vercel",
+  "description": "Bot do Telegram para chat do portfólio",
   "type": "module",
+  "main": "server.js",
   "scripts": {
-    "dev": "node server.js",
-    "dev:frontend": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build",
-    "preview": "cd frontend && npm run preview"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "axios": "^1.6.0",

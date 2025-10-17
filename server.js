@@ -11,7 +11,7 @@ const __dirname = dirname(__filename);
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Armazenar mensagens em memória (em produção, use um banco de dados)
 let messageHistory = [];
