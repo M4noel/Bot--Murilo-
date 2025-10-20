@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 let messageHistory = [];
 let lastUpdateId = 0;
 // Armazenar conversas por sessão (múltiplos usuários)
-let conversations = {}; // { sessionId: { userName, userPhone, messages: [] } }
+let conversations = {}; // { sessionId: { userName, userPhone, messages: [], lastSentIndex: 0 } }
 // Controle de conversa ativa (apenas 1 por vez)
 let activeConversation = null; // sessionId da conversa ativa
 let waitingQueue = []; // Fila de espera
@@ -204,7 +204,8 @@ app.post('/api/send', async (req, res) => {
         userPhone: userPhone || 'Não informado',
         messages: [],
         createdAt: Date.now(),
-        status: 'waiting' // waiting, active, ended
+        status: 'waiting', // waiting, active, ended
+        lastSentIndex: -1 // Índice da última mensagem enviada ao cliente
       };
     }
 
@@ -422,6 +423,11 @@ app.get('/api/messages', async (req, res) => {
     if (sessionId && conversations[sessionId]) {
       const conversation = conversations[sessionId];
       
+      // Inicializar lastSentIndex se não existir
+      if (conversation.lastSentIndex === undefined) {
+        conversation.lastSentIndex = -1;
+      }
+      
       // Adicionar IDs únicos às mensagens se ainda não tiverem
       conversation.messages.forEach((msg, index) => {
         if (!msg.uniqueId) {
@@ -429,37 +435,27 @@ app.get('/api/messages', async (req, res) => {
         }
       });
       
-      // Pegar mensagens do sistema que ainda não foram enviadas ao cliente
+      // Pegar APENAS mensagens novas (índice maior que lastSentIndex)
       conversation.messages.forEach((msg, index) => {
-        const msgId = msg.uniqueId;
-        
-        // Se é mensagem do sistema e ainda não foi enviada
-        if (msg.isSystemMessage) {
-          // Verificar se já não está em newMessages
-          const exists = newMessages.some(m => m.id === msgId);
-          if (!exists) {
-            newMessages.push({
-              id: msgId,
-              text: msg.text,
-              isUser: false,
-              timestamp: msg.timestamp,
-              isSystemMessage: true,
-              sessionId: sessionId
-            });
-          }
-        }
-        // Se é mensagem normal do bot (não do usuário) e ainda não foi enviada
-        else if (!msg.isUser && !msg.isSystemMessage) {
-          // Verificar se já não está em newMessages
+        // Apenas mensagens que ainda não foram enviadas
+        if (index > conversation.lastSentIndex && !msg.isUser) {
+          const msgId = msg.uniqueId;
+          
+          // Verificar se já não está em newMessages (do Telegram)
           const exists = newMessages.some(m => m.id === msgId || (m.text === msg.text && Math.abs(m.timestamp - msg.timestamp) < 1000));
+          
           if (!exists) {
             newMessages.push({
               id: msgId,
               text: msg.text,
               isUser: false,
               timestamp: msg.timestamp,
+              isSystemMessage: msg.isSystemMessage || false,
               sessionId: sessionId
             });
+            
+            // Atualizar lastSentIndex
+            conversation.lastSentIndex = index;
           }
         }
       });
