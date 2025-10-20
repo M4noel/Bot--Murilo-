@@ -220,7 +220,6 @@ app.post('/api/send', async (req, res) => {
     let isFirstMessage = conversations[sessionId].messages.length === 1;
     let shouldNotifyUser = false;
     let userPosition = 0;
-    let systemMessageAdded = false;
     
     if (!activeConversation && isFirstMessage) {
       // Primeira mensagem e nenhuma conversa ativa - ativar esta
@@ -228,14 +227,7 @@ app.post('/api/send', async (req, res) => {
       conversations[sessionId].status = 'active';
       messageStatus = '🟢 *CONVERSA ATIVA* - Você pode responder agora!';
       
-      // Enviar mensagem de boas-vindas para o usuário
-      conversations[sessionId].messages.push({
-        text: '✅ Chat iniciado! Em breve você será atendido.',
-        isUser: false,
-        timestamp: Date.now(),
-        isSystemMessage: true
-      });
-      systemMessageAdded = true;
+      // NÃO adicionar mensagem de boas-vindas aqui - ela é adicionada no cliente
     } else if (activeConversation === sessionId) {
       // Continuação da conversa ativa
       messageStatus = '🟢 *CONVERSA ATIVA*';
@@ -430,25 +422,36 @@ app.get('/api/messages', async (req, res) => {
     if (sessionId && conversations[sessionId]) {
       const conversation = conversations[sessionId];
       
+      // Adicionar IDs únicos às mensagens se ainda não tiverem
+      conversation.messages.forEach((msg, index) => {
+        if (!msg.uniqueId) {
+          msg.uniqueId = msg.timestamp + '_' + index;
+        }
+      });
+      
       // Pegar mensagens do sistema que ainda não foram enviadas ao cliente
       conversation.messages.forEach((msg, index) => {
-        const msgId = msg.timestamp + index; // ID único baseado em timestamp + index
+        const msgId = msg.uniqueId;
         
-        // Se é mensagem do sistema e ainda não foi enviada (baseado no lastMessageId)
-        if (msg.isSystemMessage && msgId > lastMessageId) {
-          newMessages.push({
-            id: msgId,
-            text: msg.text,
-            isUser: false,
-            timestamp: msg.timestamp,
-            isSystemMessage: true,
-            sessionId: sessionId
-          });
+        // Se é mensagem do sistema e ainda não foi enviada
+        if (msg.isSystemMessage) {
+          // Verificar se já não está em newMessages
+          const exists = newMessages.some(m => m.id === msgId);
+          if (!exists) {
+            newMessages.push({
+              id: msgId,
+              text: msg.text,
+              isUser: false,
+              timestamp: msg.timestamp,
+              isSystemMessage: true,
+              sessionId: sessionId
+            });
+          }
         }
         // Se é mensagem normal do bot (não do usuário) e ainda não foi enviada
-        else if (!msg.isUser && !msg.isSystemMessage && msgId > lastMessageId) {
-          // Verificar se já não está em newMessages (evitar duplicatas)
-          const exists = newMessages.some(m => m.text === msg.text && Math.abs(m.timestamp - msg.timestamp) < 1000);
+        else if (!msg.isUser && !msg.isSystemMessage) {
+          // Verificar se já não está em newMessages
+          const exists = newMessages.some(m => m.id === msgId || (m.text === msg.text && Math.abs(m.timestamp - msg.timestamp) < 1000));
           if (!exists) {
             newMessages.push({
               id: msgId,
