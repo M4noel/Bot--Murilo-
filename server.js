@@ -220,6 +220,7 @@ app.post('/api/send', async (req, res) => {
     let isFirstMessage = conversations[sessionId].messages.length === 1;
     let shouldNotifyUser = false;
     let userPosition = 0;
+    let systemMessageAdded = false;
     
     if (!activeConversation && isFirstMessage) {
       // Primeira mensagem e nenhuma conversa ativa - ativar esta
@@ -234,6 +235,7 @@ app.post('/api/send', async (req, res) => {
         timestamp: Date.now(),
         isSystemMessage: true
       });
+      systemMessageAdded = true;
     } else if (activeConversation === sessionId) {
       // Continuação da conversa ativa
       messageStatus = '🟢 *CONVERSA ATIVA*';
@@ -303,15 +305,11 @@ ${message}
       sessionId: sessionId
     });
 
-    // Notificações do sistema
+    // Notificações do sistema (apenas para fila, não para primeira mensagem)
     let systemNotification = null;
     
-    // Se é primeira mensagem e foi ativado
-    if (!activeConversation && isFirstMessage) {
-      systemNotification = '✅ Chat iniciado! Em breve você será atendido.';
-    }
-    // Se o usuário está na fila
-    else if (shouldNotifyUser && userPosition > 0) {
+    // Se o usuário está na fila (não enviar para primeira mensagem, pois já está na conversa)
+    if (shouldNotifyUser && userPosition > 0) {
       systemNotification = `⏳ Você está na fila de atendimento!\n\n📍 Posição: ${userPosition}\n\n⏰ Aguarde, em breve você será atendido.`;
       
       // Adicionar mensagem automática à conversa
@@ -344,6 +342,7 @@ app.get('/api/messages', async (req, res) => {
   const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
   const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
   const sessionId = req.query.sessionId;
+  const lastMessageId = req.query.lastMessageId ? parseInt(req.query.lastMessageId) : 0;
 
   if (!TELEGRAM_TOKEN || !CHAT_ID) {
     return res.status(500).json({ 
@@ -427,6 +426,55 @@ app.get('/api/messages', async (req, res) => {
       }
     }
 
+    // NOVO: Buscar mensagens do sistema da conversa do usuário
+    if (sessionId && conversations[sessionId]) {
+      const conversation = conversations[sessionId];
+      
+      // Pegar mensagens do sistema que ainda não foram enviadas ao cliente
+      conversation.messages.forEach((msg, index) => {
+        const msgId = msg.timestamp + index; // ID único baseado em timestamp + index
+        
+        // Se é mensagem do sistema e ainda não foi enviada (baseado no lastMessageId)
+        if (msg.isSystemMessage && msgId > lastMessageId) {
+          newMessages.push({
+            id: msgId,
+            text: msg.text,
+            isUser: false,
+            timestamp: msg.timestamp,
+            isSystemMessage: true,
+            sessionId: sessionId
+          });
+        }
+        // Se é mensagem normal do bot (não do usuário) e ainda não foi enviada
+        else if (!msg.isUser && !msg.isSystemMessage && msgId > lastMessageId) {
+          // Verificar se já não está em newMessages (evitar duplicatas)
+          const exists = newMessages.some(m => m.text === msg.text && Math.abs(m.timestamp - msg.timestamp) < 1000);
+          if (!exists) {
+            newMessages.push({
+              id: msgId,
+              text: msg.text,
+              isUser: false,
+              timestamp: msg.timestamp,
+              sessionId: sessionId
+            });
+          }
+        }
+      });
+      
+      // Enviar status da conversa
+      const conversationStatus = {
+        status: conversation.status,
+        queuePosition: conversation.status === 'waiting' ? waitingQueue.indexOf(sessionId) + 1 : 0
+      };
+      
+      return res.status(200).json({ 
+        success: true, 
+        messages: newMessages,
+        totalMessages: messageHistory.length,
+        conversationStatus: conversationStatus
+      });
+    }
+
     return res.status(200).json({ 
       success: true, 
       messages: newMessages,
@@ -479,6 +527,104 @@ app.post('/api/end-conversation', (req, res) => {
     endedUser: endedUser ? endedUser.userName : null,
     nextUser: nextUser ? nextUser.userName : null,
     queueLength: waitingQueue.length
+  });
+});
+
+// Rota para o USUÁRIO encerrar o chat pelo site
+app.post('/api/user-end-chat', async (req, res) => {
+  const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+  const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+  const { sessionId, userName, userPhone } = req.body;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      success: false,
+      message: 'SessionId é obrigatório'
+    });
+  }
+
+  // Verificar se a conversa existe
+  if (!conversations[sessionId]) {
+    return res.status(404).json({
+      success: false,
+      message: 'Conversa não encontrada'
+    });
+  }
+
+  const user = conversations[sessionId];
+  const wasActive = activeConversation === sessionId;
+
+  // Marcar como encerrada
+  conversations[sessionId].status = 'ended';
+
+  // Adicionar mensagem de encerramento à conversa
+  conversations[sessionId].messages.push({
+    text: '✅ Você encerrou o chat. Obrigado pelo contato!',
+    isUser: false,
+    timestamp: Date.now(),
+    isSystemMessage: true
+  });
+
+  // Se era a conversa ativa, limpar e ativar próximo
+  if (wasActive) {
+    activeConversation = null;
+
+    // Ativar próximo da fila
+    if (waitingQueue.length > 0) {
+      const nextSession = waitingQueue.shift();
+      activeConversation = nextSession;
+      if (conversations[nextSession]) {
+        conversations[nextSession].status = 'active';
+        
+        // Notificar próximo usuário
+        conversations[nextSession].messages.push({
+          text: '🟢 Agora é sua vez! Você está sendo atendido.',
+          isUser: false,
+          timestamp: Date.now(),
+          isSystemMessage: true
+        });
+      }
+    }
+  } else {
+    // Se estava na fila, remover da fila
+    const queueIndex = waitingQueue.indexOf(sessionId);
+    if (queueIndex > -1) {
+      waitingQueue.splice(queueIndex, 1);
+    }
+  }
+
+  // Enviar notificação para o Telegram
+  try {
+    let message = `🔴 *CHAT ENCERRADO PELO USUÁRIO*\n\n`;
+    message += `👤 *Nome:* ${user.userName}\n`;
+    message += `📞 *Telefone:* ${user.userPhone}\n`;
+    message += `🆔 *ID:* \`${sessionId}\`\n`;
+    message += `📊 *Status:* ${wasActive ? 'Era conversa ativa' : 'Estava na fila'}\n`;
+    message += `💬 *Total de mensagens:* ${user.messages.length}\n\n`;
+    
+    if (activeConversation && conversations[activeConversation]) {
+      const nextUser = conversations[activeConversation];
+      message += `🔄 *Próximo ativo:* ${nextUser.userName}\n`;
+      message += `📞 ${nextUser.userPhone}`;
+    } else {
+      message += `📭 Nenhuma conversa ativa no momento.`;
+    }
+
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+      {
+        chat_id: CHAT_ID,
+        text: message,
+        parse_mode: 'Markdown'
+      }
+    );
+  } catch (error) {
+    console.error('❌ Erro ao enviar notificação de encerramento:', error);
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Chat encerrado com sucesso'
   });
 });
 
